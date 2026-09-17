@@ -2,13 +2,17 @@ import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef } f
 import * as THREE from 'three';
 // @ts-ignore
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { LoadedIFCModel } from '../types/ifc';
-import { Eye, Layers, Maximize2, Scissors } from 'lucide-react';
+import { LoadedIFCModel, ColorMode, SpatialNode } from '../types/ifc';
+import { Eye, Layers, Maximize2, Scissors, Grid } from 'lucide-react';
 
 export interface Viewer3DRef {
-  selectElement: (expressID: number | null) => void;
-  isolateElement: (expressID: number) => void;
-  hideElement: (expressID: number) => void;
+  selectElement: (modelId: string | null, expressID: number | null) => void;
+  toggleNodeVisibility: (node: SpatialNode, visible: boolean) => void;
+  toggleStoreyVisibility: (storeyName: string, visible: boolean) => void;
+  toggleCategoryVisibility: (categoryName: string, visible: boolean) => void;
+  toggleModelVisibility: (modelId: string, visible: boolean) => void;
+  isolateElement: (modelId: string, expressID: number) => void;
+  hideElement: (modelId: string, expressID: number) => void;
   showAll: () => void;
   fitView: () => void;
   setCameraView: (view: 'top' | 'front' | 'right' | 'iso') => void;
@@ -16,41 +20,71 @@ export interface Viewer3DRef {
 }
 
 interface Viewer3DProps {
-  model: LoadedIFCModel | null;
+  models: LoadedIFCModel[];
+  selectedModelId: string | null;
   selectedExpressID: number | null;
-  onSelectElement: (expressID: number | null) => void;
+  onSelectElement: (modelId: string | null, expressID: number | null) => void;
+  colorMode: ColorMode;
+  hiddenNodeIds: Set<string>;
 }
 
 export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
-  model,
+  models,
+  selectedModelId,
   selectedExpressID,
-  onSelectElement
+  onSelectElement,
+  colorMode,
+  hiddenNodeIds
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const gridHelperRef = useRef<THREE.GridHelper | null>(null);
 
   const [clippingActive, setClippingActive] = useState<boolean>(false);
   const [clippingAxis, setClippingAxis] = useState<'x' | 'y' | 'z'>('z');
   const [clippingOffset, setClippingOffset] = useState<number>(0);
   const [clippingRange, setClippingRange] = useState<{ min: number; max: number }>({ min: -50, max: 50 });
   const [wireframeMode, setWireframeMode] = useState<boolean>(false);
+  const [showGrid, setShowGrid] = useState<boolean>(true);
 
   const clipPlaneRef = useRef<THREE.Plane>(new THREE.Plane(new THREE.Vector3(0, -1, 0), 0));
+  const modelsRootGroupRef = useRef<THREE.Group>(new THREE.Group());
+
   const highlightMaterialRef = useRef<THREE.MeshStandardMaterial>(
     new THREE.MeshStandardMaterial({
-      color: 0x06b6d4,
+      color: 0x00ffff,
       emissive: 0x0891b2,
-      emissiveIntensity: 0.5,
+      emissiveIntensity: 0.6,
       roughness: 0.2,
-      metalness: 0.3,
+      metalness: 0.4,
       side: THREE.DoubleSide
     })
   );
 
-  const hiddenElementsRef = useRef<Set<number>>(new Set());
+  // Material caches for color modes
+  const categoryMaterialCache = useRef<Map<number, THREE.MeshStandardMaterial>>(new Map());
+  const storeyMaterialCache = useRef<Map<number, THREE.MeshStandardMaterial>>(new Map());
+
+  const getColoredMaterial = (colorHex: number, isTransparent: boolean, opacity: number): THREE.MeshStandardMaterial => {
+    const key = colorHex;
+    const cache = categoryMaterialCache.current;
+    if (cache.has(key)) return cache.get(key)!;
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(colorHex),
+      roughness: 0.45,
+      metalness: 0.1,
+      transparent: isTransparent,
+      opacity: opacity,
+      side: THREE.DoubleSide,
+      depthWrite: !isTransparent
+    });
+    cache.set(key, mat);
+    return mat;
+  };
 
   // Setup Three.js Scene
   useEffect(() => {
@@ -64,8 +98,8 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
     scene.background = new THREE.Color(0x0a0f1d);
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
-    camera.position.set(20, 20, 20);
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 3000);
+    camera.position.set(25, 25, 25);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({
@@ -89,27 +123,30 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
     controls.screenSpacePanning = true;
     controlsRef.current = controls;
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.75);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
     scene.add(ambientLight);
 
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x334155, 0.6);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x334155, 0.65);
     hemiLight.position.set(0, 50, 0);
     scene.add(hemiLight);
 
-    const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.9);
-    dirLight1.position.set(50, 100, 50);
+    const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.95);
+    dirLight1.position.set(60, 120, 60);
     dirLight1.castShadow = true;
     dirLight1.shadow.mapSize.width = 2048;
     dirLight1.shadow.mapSize.height = 2048;
     scene.add(dirLight1);
 
-    const dirLight2 = new THREE.DirectionalLight(0x93c5fd, 0.4);
-    dirLight2.position.set(-50, -30, -50);
+    const dirLight2 = new THREE.DirectionalLight(0x93c5fd, 0.45);
+    dirLight2.position.set(-60, -40, -60);
     scene.add(dirLight2);
 
-    const grid = new THREE.GridHelper(100, 50, 0x3b82f6, 0x1e293b);
+    const grid = new THREE.GridHelper(120, 60, 0x3b82f6, 0x1e293b);
     grid.position.y = -0.01;
     scene.add(grid);
+    gridHelperRef.current = grid;
+
+    scene.add(modelsRootGroupRef.current);
 
     let animationFrameId: number;
     const animate = () => {
@@ -151,20 +188,19 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
-      if (model?.meshGroup) {
-        const intersects = raycaster.intersectObjects(model.meshGroup.children, true);
-        const visibleIntersects = intersects.filter(hit => hit.object.visible);
+      const intersects = raycaster.intersectObjects(modelsRootGroupRef.current.children, true);
+      const visibleIntersects = intersects.filter(hit => hit.object.visible && hit.object.parent?.visible);
 
-        if (visibleIntersects.length > 0) {
-          const hitMesh = visibleIntersects[0].object as THREE.Mesh;
-          const expID = hitMesh.userData?.expressID || hitMesh.parent?.userData?.expressID;
-          if (expID) {
-            onSelectElement(expID);
-            return;
-          }
+      if (visibleIntersects.length > 0) {
+        const hitMesh = visibleIntersects[0].object as THREE.Mesh;
+        const mId = hitMesh.userData?.modelId || hitMesh.parent?.userData?.modelId;
+        const expID = hitMesh.userData?.expressID || hitMesh.parent?.userData?.expressID;
+        if (expID !== undefined) {
+          onSelectElement(mId || null, expID);
+          return;
         }
       }
-      onSelectElement(null);
+      onSelectElement(null, null);
     };
 
     renderer.domElement.addEventListener('mousedown', onMouseDown);
@@ -179,25 +215,26 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
     };
   }, []);
 
-  // Update Model in Scene
+  // Update Grid Visibility
   useEffect(() => {
-    const scene = sceneRef.current;
-    if (!scene) return;
+    if (gridHelperRef.current) {
+      gridHelperRef.current.visible = showGrid;
+    }
+  }, [showGrid]);
 
-    const toRemove: THREE.Object3D[] = [];
-    scene.children.forEach(c => {
-      if (c.name && c.name.startsWith('IFCModel_')) {
-        toRemove.push(c);
+  // Update Models in Scene
+  useEffect(() => {
+    const rootGroup = modelsRootGroupRef.current;
+    rootGroup.clear();
+
+    models.forEach(m => {
+      if (m.meshGroup && m.visible !== false) {
+        rootGroup.add(m.meshGroup);
       }
     });
-    toRemove.forEach(c => scene.remove(c));
 
-    hiddenElementsRef.current.clear();
-
-    if (model?.meshGroup) {
-      scene.add(model.meshGroup);
-
-      const box = new THREE.Box3().setFromObject(model.meshGroup);
+    if (models.length > 0 && rootGroup.children.length > 0) {
+      const box = new THREE.Box3().setFromObject(rootGroup);
       const size = new THREE.Vector3();
       const center = new THREE.Vector3();
       box.getSize(size);
@@ -221,28 +258,73 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
       });
       setClippingOffset(Math.round(center.y));
     }
-  }, [model]);
+  }, [models]);
 
-  // Apply Selection Highlight
+  // Apply Material Colors, Wireframe and Selection Highlights
   useEffect(() => {
-    if (!model?.meshGroup) return;
+    const rootGroup = modelsRootGroupRef.current;
 
-    model.meshGroup.traverse((child: any) => {
+    rootGroup.traverse((child: any) => {
       if (child.isMesh && child.userData.originalMaterial) {
-        const isSelected = child.userData.expressID === selectedExpressID || child.parent?.userData?.expressID === selectedExpressID;
+        const u = child.userData;
+        const isSelected = (selectedExpressID !== null) &&
+          (u.expressID === selectedExpressID || child.parent?.userData?.expressID === selectedExpressID) &&
+          (!selectedModelId || u.modelId === selectedModelId || child.parent?.userData?.modelId === selectedModelId);
+
         if (isSelected) {
           child.material = highlightMaterialRef.current;
         } else {
-          child.material = child.userData.originalMaterial;
+          let baseMat = u.originalMaterial;
+
+          if (colorMode === 'category' && u.categoryColor) {
+            baseMat = getColoredMaterial(u.categoryColor, u.originalMaterial.transparent, u.originalMaterial.opacity);
+          } else if (colorMode === 'storey' && u.storeyColor) {
+            baseMat = getColoredMaterial(u.storeyColor, u.originalMaterial.transparent, u.originalMaterial.opacity);
+          }
+
+          child.material = baseMat;
           child.material.wireframe = wireframeMode;
         }
       }
     });
-  }, [selectedExpressID, model, wireframeMode]);
+  }, [models, selectedModelId, selectedExpressID, colorMode, wireframeMode]);
+
+  // Apply Node Visibility Filter from Spatial Tree
+  useEffect(() => {
+    const rootGroup = modelsRootGroupRef.current;
+
+    rootGroup.traverse((child: any) => {
+      if (child.isMesh || child.isGroup) {
+        const u = child.userData;
+        if (!u) return;
+
+        let shouldBeHidden = false;
+
+        // Check if model is hidden
+        if (u.modelId && hiddenNodeIds.has(`model_${u.modelId}`)) {
+          shouldBeHidden = true;
+        }
+        // Check if storey is hidden
+        if (u.storeyName && (hiddenNodeIds.has(`storey_${u.modelId}_${u.storeyName}`) || hiddenNodeIds.has(`global_storey_${u.storeyName}`))) {
+          shouldBeHidden = true;
+        }
+        // Check if category is hidden
+        if (u.categoryName && (hiddenNodeIds.has(`cat_${u.modelId}_${u.storeyName}_${u.categoryName}`) || hiddenNodeIds.has(`global_cat_${u.categoryName}`))) {
+          shouldBeHidden = true;
+        }
+        // Check if element is hidden
+        if (u.expressID !== undefined && (hiddenNodeIds.has(`elem_${u.modelId}_${u.expressID}`) || hiddenNodeIds.has(`global_elem_${u.expressID}`))) {
+          shouldBeHidden = true;
+        }
+
+        child.visible = !shouldBeHidden;
+      }
+    });
+  }, [hiddenNodeIds, models]);
 
   // Apply Clipping Plane
   useEffect(() => {
-    if (!model?.meshGroup) return;
+    const rootGroup = modelsRootGroupRef.current;
 
     const normal = new THREE.Vector3(
       clippingAxis === 'x' ? -1 : 0,
@@ -252,7 +334,7 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
 
     clipPlaneRef.current.set(normal, clippingOffset);
 
-    model.meshGroup.traverse((child: any) => {
+    rootGroup.traverse((child: any) => {
       if (child.isMesh && child.material) {
         if (clippingActive) {
           child.material.clippingPlanes = [clipPlaneRef.current];
@@ -263,48 +345,58 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
         child.material.needsUpdate = true;
       }
     });
-  }, [clippingActive, clippingAxis, clippingOffset, model]);
+  }, [clippingActive, clippingAxis, clippingOffset, models]);
 
   // Imperative handle
   useImperativeHandle(ref, () => ({
-    selectElement: (expressID: number | null) => {
-      onSelectElement(expressID);
+    selectElement: (modelId: string | null, expressID: number | null) => {
+      onSelectElement(modelId, expressID);
     },
-    isolateElement: (expressID: number) => {
-      if (!model?.meshGroup) return;
-      model.meshGroup.traverse((child: any) => {
+    toggleNodeVisibility: (node: SpatialNode, visible: boolean) => {
+      // Managed via hiddenNodeIds in App state
+    },
+    toggleStoreyVisibility: (storeyName: string, visible: boolean) => {
+      // Managed via App state
+    },
+    toggleCategoryVisibility: (categoryName: string, visible: boolean) => {
+      // Managed via App state
+    },
+    toggleModelVisibility: (modelId: string, visible: boolean) => {
+      // Managed via App state
+    },
+    isolateElement: (modelId: string, expressID: number) => {
+      const rootGroup = modelsRootGroupRef.current;
+      rootGroup.traverse((child: any) => {
         if (child.isMesh) {
-          const match = child.userData?.expressID === expressID || child.parent?.userData?.expressID === expressID;
+          const match = child.userData?.expressID === expressID && (!modelId || child.userData?.modelId === modelId);
           child.visible = match;
         }
       });
     },
-    hideElement: (expressID: number) => {
-      if (!model?.meshGroup) return;
-      hiddenElementsRef.current.add(expressID);
-      model.meshGroup.traverse((child: any) => {
+    hideElement: (modelId: string, expressID: number) => {
+      const rootGroup = modelsRootGroupRef.current;
+      rootGroup.traverse((child: any) => {
         if (child.isMesh) {
-          if (child.userData?.expressID === expressID || child.parent?.userData?.expressID === expressID) {
-            child.visible = false;
-          }
+          const match = child.userData?.expressID === expressID && (!modelId || child.userData?.modelId === modelId);
+          if (match) child.visible = false;
         }
       });
       if (selectedExpressID === expressID) {
-        onSelectElement(null);
+        onSelectElement(null, null);
       }
     },
     showAll: () => {
-      if (!model?.meshGroup) return;
-      hiddenElementsRef.current.clear();
-      model.meshGroup.traverse((child: any) => {
-        if (child.isMesh) {
+      const rootGroup = modelsRootGroupRef.current;
+      rootGroup.traverse((child: any) => {
+        if (child.isMesh || child.isGroup) {
           child.visible = true;
         }
       });
     },
     fitView: () => {
-      if (!model?.meshGroup || !cameraRef.current || !controlsRef.current) return;
-      const box = new THREE.Box3().setFromObject(model.meshGroup);
+      const rootGroup = modelsRootGroupRef.current;
+      if (!cameraRef.current || !controlsRef.current || rootGroup.children.length === 0) return;
+      const box = new THREE.Box3().setFromObject(rootGroup);
       const size = new THREE.Vector3();
       const center = new THREE.Vector3();
       box.getSize(size);
@@ -316,8 +408,9 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
       controlsRef.current.update();
     },
     setCameraView: (view: 'top' | 'front' | 'right' | 'iso') => {
-      if (!model?.meshGroup || !cameraRef.current || !controlsRef.current) return;
-      const box = new THREE.Box3().setFromObject(model.meshGroup);
+      const rootGroup = modelsRootGroupRef.current;
+      if (!cameraRef.current || !controlsRef.current || rootGroup.children.length === 0) return;
+      const box = new THREE.Box3().setFromObject(rootGroup);
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
       const dist = Math.max(size.x, size.y, size.z) * 1.8;
@@ -350,8 +443,9 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
           <button
             title="Ajustar a la vista (Fit)"
             onClick={() => {
-              if (model?.meshGroup && cameraRef.current && controlsRef.current) {
-                const box = new THREE.Box3().setFromObject(model.meshGroup);
+              const rootGroup = modelsRootGroupRef.current;
+              if (cameraRef.current && controlsRef.current && rootGroup.children.length > 0) {
+                const box = new THREE.Box3().setFromObject(rootGroup);
                 const size = new THREE.Vector3();
                 const center = new THREE.Vector3();
                 box.getSize(size);
@@ -371,8 +465,9 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
           <button
             title="Vista Superior (Planta)"
             onClick={() => {
-              if (model?.meshGroup && cameraRef.current && controlsRef.current) {
-                const box = new THREE.Box3().setFromObject(model.meshGroup);
+              const rootGroup = modelsRootGroupRef.current;
+              if (cameraRef.current && controlsRef.current && rootGroup.children.length > 0) {
+                const box = new THREE.Box3().setFromObject(rootGroup);
                 const center = box.getCenter(new THREE.Vector3());
                 const dist = box.getSize(new THREE.Vector3()).length() * 1.2;
                 cameraRef.current.position.set(center.x, center.y + dist, center.z);
@@ -388,8 +483,9 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
           <button
             title="Vista Frontal"
             onClick={() => {
-              if (model?.meshGroup && cameraRef.current && controlsRef.current) {
-                const box = new THREE.Box3().setFromObject(model.meshGroup);
+              const rootGroup = modelsRootGroupRef.current;
+              if (cameraRef.current && controlsRef.current && rootGroup.children.length > 0) {
+                const box = new THREE.Box3().setFromObject(rootGroup);
                 const center = box.getCenter(new THREE.Vector3());
                 const dist = box.getSize(new THREE.Vector3()).length() * 1.2;
                 cameraRef.current.position.set(center.x, center.y, center.z + dist);
@@ -405,8 +501,9 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
           <button
             title="Vista Isométrica 3D"
             onClick={() => {
-              if (model?.meshGroup && cameraRef.current && controlsRef.current) {
-                const box = new THREE.Box3().setFromObject(model.meshGroup);
+              const rootGroup = modelsRootGroupRef.current;
+              if (cameraRef.current && controlsRef.current && rootGroup.children.length > 0) {
+                const box = new THREE.Box3().setFromObject(rootGroup);
                 const center = box.getCenter(new THREE.Vector3());
                 const dist = box.getSize(new THREE.Vector3()).length() * 1.2;
                 cameraRef.current.position.set(center.x + dist * 0.7, center.y + dist * 0.5, center.z + dist * 0.7);
@@ -420,8 +517,16 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
           </button>
         </div>
 
-        {/* View Mode & Clipping Buttons */}
+        {/* View Mode, Clipping & Grid Toggle Buttons */}
         <div className="bg-bim-900/90 backdrop-blur border border-bim-700/60 rounded-xl p-1.5 shadow-2xl flex flex-col gap-1">
+          <button
+            title={showGrid ? "Ocultar Rejilla de Fondo" : "Mostrar Rejilla de Fondo"}
+            onClick={() => setShowGrid(!showGrid)}
+            className={`p-2 rounded-lg transition ${showGrid ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:text-white hover:bg-bim-800'}`}
+          >
+            <Grid size={18} />
+          </button>
+
           <button
             title="Corte / Sección interactiva"
             onClick={() => setClippingActive(!clippingActive)}
@@ -436,21 +541,6 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
             className={`p-2 rounded-lg transition ${wireframeMode ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-300 hover:text-white hover:bg-bim-800'}`}
           >
             <Layers size={18} />
-          </button>
-
-          <button
-            title="Mostrar todos los elementos"
-            onClick={() => {
-              if (model?.meshGroup) {
-                hiddenElementsRef.current.clear();
-                model.meshGroup.traverse((child: any) => {
-                  if (child.isMesh) child.visible = true;
-                });
-              }
-            }}
-            className="p-2 text-slate-300 hover:text-white hover:bg-bim-800 rounded-lg transition"
-          >
-            <Eye size={18} />
           </button>
         </div>
       </div>

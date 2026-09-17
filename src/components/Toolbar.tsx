@@ -1,24 +1,29 @@
 import React, { useRef } from 'react';
 import {
   FolderOpen,
+  Plus,
   FileSpreadsheet,
   Search,
   BarChart3,
   Camera,
   Layers,
-  Sliders
+  Sliders,
+  Palette,
+  X,
+  FileCode2
 } from 'lucide-react';
-import { LoadedIFCModel } from '../types/ifc';
-import { SAMPLE_IFC_2X3 } from '../samples/sampleIfc2x3';
-import { SAMPLE_IFC_4 } from '../samples/sampleIfc4';
+import { LoadedIFCModel, ColorMode } from '../types/ifc';
 
 interface ToolbarProps {
-  model: LoadedIFCModel | null;
+  models: LoadedIFCModel[];
   onOpenIFCFile: (fileData: Uint8Array, fileName: string) => void;
+  onRemoveModel: (modelId: string) => void;
   onOpenSearch: () => void;
   onOpenStats: () => void;
+  onOpenColorFilter: () => void;
   onExportExcel: () => void;
   onTakeScreenshot: () => void;
+  colorMode: ColorMode;
   showLeftPanel: boolean;
   setShowLeftPanel: (v: boolean | ((prev: boolean) => boolean)) => void;
   showRightPanel: boolean;
@@ -26,12 +31,15 @@ interface ToolbarProps {
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
-  model,
+  models,
   onOpenIFCFile,
+  onRemoveModel,
   onOpenSearch,
   onOpenStats,
+  onOpenColorFilter,
   onExportExcel,
   onTakeScreenshot,
+  colorMode,
   showLeftPanel,
   setShowLeftPanel,
   showRightPanel,
@@ -65,13 +73,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     e.target.value = '';
   };
 
-  const loadSample = (type: '2x3' | '4') => {
-    const text = type === '2x3' ? SAMPLE_IFC_2X3 : SAMPLE_IFC_4;
-    const encoder = new TextEncoder();
-    const data = encoder.encode(text);
-    const fileName = type === '2x3' ? 'Muestra_Edificio_IFC2X3.ifc' : 'Muestra_Complejo_IFC4.ifc';
-    onOpenIFCFile(data, fileName);
-  };
+  const totalElements = models.reduce((acc, m) => acc + m.metadata.totalElements, 0);
 
   return (
     <div className="h-14 bg-bim-900 border-b border-bim-800 px-4 flex items-center justify-between select-none z-30 shrink-0">
@@ -79,11 +81,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         ref={fileInputRef}
         type="file"
         accept=".ifc"
+        multiple
         onChange={handleFileInputChange}
         className="hidden"
       />
 
-      {/* Left: App Logo & Open IFC */}
+      {/* Left: App Logo & Open / Add IFC */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2 mr-2">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 text-white font-black text-sm">
@@ -93,11 +96,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <h1 className="text-sm font-extrabold tracking-tight text-white flex items-center gap-1.5">
               <span>Visualizador IFC Pro</span>
               <span className="text-[10px] font-bold px-1.5 py-0.2 bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded">
-                2.3 & 4
+                Multi-IFC 2.3 / 4
               </span>
             </h1>
             <p className="text-[10px] text-slate-400 leading-none">
-              {model ? `${model.metadata.fileName} (${model.metadata.schema})` : 'Visor BIM Local Nativo'}
+              {models.length > 0 ? `${models.length} ${models.length === 1 ? 'modelo' : 'modelos'} (${totalElements} elementos)` : 'Visor BIM Local Nativo'}
             </p>
           </div>
         </div>
@@ -106,32 +109,51 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           onClick={handleNativeOpen}
           className="flex items-center gap-2 px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold shadow-md shadow-cyan-900/30 transition active:scale-95"
         >
-          <FolderOpen size={16} />
-          <span>Abrir Archivo IFC</span>
+          {models.length === 0 ? <FolderOpen size={16} /> : <Plus size={16} />}
+          <span>{models.length === 0 ? 'Abrir Archivo IFC' : 'Añadir Otro IFC'}</span>
         </button>
 
-        {/* Sample Loaders */}
-        <div className="hidden lg:flex items-center gap-1 bg-bim-950/80 p-1 rounded-xl border border-bim-800 text-[11px]">
-          <span className="text-slate-500 px-2 font-semibold">Ejemplos:</span>
-          <button
-            onClick={() => loadSample('2x3')}
-            className="px-2.5 py-1 bg-bim-800 hover:bg-bim-700 text-slate-300 hover:text-white rounded-lg font-medium transition"
-          >
-            IFC 2.3
-          </button>
-          <button
-            onClick={() => loadSample('4')}
-            className="px-2.5 py-1 bg-bim-800 hover:bg-bim-700 text-slate-300 hover:text-white rounded-lg font-medium transition"
-          >
-            IFC 4
-          </button>
-        </div>
+        {/* Loaded Models Badges (if multiple) */}
+        {models.length > 0 && (
+          <div className="hidden xl:flex items-center gap-1.5 overflow-x-auto max-w-md">
+            {models.map(m => (
+              <div
+                key={m.id}
+                className="flex items-center gap-1.5 bg-bim-950/80 px-2.5 py-1 rounded-lg border border-bim-800 text-[11px] font-medium text-slate-300"
+              >
+                <FileCode2 size={13} className="text-cyan-400 shrink-0" />
+                <span className="truncate max-w-[120px]" title={m.metadata.fileName}>
+                  {m.metadata.fileName}
+                </span>
+                <button
+                  onClick={() => onRemoveModel(m.id)}
+                  className="p-0.5 text-slate-500 hover:text-red-400 rounded transition ml-0.5"
+                  title="Cerrar este modelo"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Middle & Right: Actions & Tools */}
       <div className="flex items-center gap-2">
-        {model && (
+        {models.length > 0 && (
           <>
+            {/* Color Mode & Visibility Filter Button */}
+            <button
+              onClick={onOpenColorFilter}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-bim-800 hover:bg-bim-750 text-slate-200 rounded-xl text-xs font-semibold transition border border-bim-700/60"
+              title="Colorear y filtrar por Nivel o Categoría"
+            >
+              <Palette size={14} className="text-cyan-400" />
+              <span>
+                {colorMode === 'category' ? 'Color: Categorías' : colorMode === 'storey' ? 'Color: Niveles' : 'Color: Original'}
+              </span>
+            </button>
+
             <button
               onClick={onOpenSearch}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-bim-800 hover:bg-bim-750 text-slate-200 rounded-xl text-xs font-semibold transition"

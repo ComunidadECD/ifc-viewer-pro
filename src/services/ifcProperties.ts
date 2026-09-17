@@ -44,6 +44,7 @@ export function extractPropertyValue(propVal: any): any {
 export class IFCDataExtractor {
   private api: IfcAPI;
   private modelID: number;
+  private modelUuid: string;
 
   private elementToStorey = new Map<number, { id: number; name: string }>();
   private elementToPsets = new Map<number, IFCPropertySet[]>();
@@ -52,9 +53,10 @@ export class IFCDataExtractor {
   private elementToMaterials = new Map<number, IFCMaterialData[]>();
   private elementToClassifications = new Map<number, IFCClassificationData[]>();
 
-  constructor(api: IfcAPI, modelID: number) {
+  constructor(api: IfcAPI, modelID: number, modelUuid: string = 'model_1') {
     this.api = api;
     this.modelID = modelID;
+    this.modelUuid = modelUuid;
   }
 
   public async indexAllRelationships(): Promise<void> {
@@ -342,6 +344,7 @@ export class IFCDataExtractor {
     const classifications = this.elementToClassifications.get(expressID);
 
     return {
+      modelId: this.modelUuid,
       expressID,
       globalId,
       ifcType,

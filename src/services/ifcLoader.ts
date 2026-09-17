@@ -22,33 +22,46 @@ export async function getIfcAPI(): Promise<IfcAPI> {
   return ifcApiInstance;
 }
 
-const CATEGORY_COLORS: Record<string, number> = {
-  IFCWALL: 0xe2e8f0,
-  IFCWALLSTANDARDCASE: 0xe2e8f0,
-  IFCSLAB: 0xcbd5e1,
-  IFCCOLUMN: 0x94a3b8,
-  IFCBEAM: 0x64748b,
-  IFCDOOR: 0x93c5fd,
-  IFCWINDOW: 0x38bdf8,
-  IFCROOF: 0xf87171,
-  IFCSTAIR: 0xfcd34d,
-  IFCSTAIRFLIGHT: 0xfcd34d,
-  IFCRAILING: 0xa8a29e,
-  IFCMEMBER: 0x64748b,
-  IFCPLATE: 0x94a3b8,
-  IFCCURTAINWALL: 0x7dd3fc,
-  IFCFLOWTERMINAL: 0x4ade80,
+export const CATEGORY_COLORS: Record<string, number> = {
+  IFCWALL: 0xdce2ec,
+  IFCWALLSTANDARDCASE: 0xdce2ec,
+  IFCSLAB: 0x94a3b8,
+  IFCCOLUMN: 0x3b82f6,
+  IFCBEAM: 0x6366f1,
+  IFCDOOR: 0xf59e0b,
+  IFCWINDOW: 0x06b6d4,
+  IFCROOF: 0xef4444,
+  IFCSTAIR: 0x10b981,
+  IFCSTAIRFLIGHT: 0x10b981,
+  IFCRAILING: 0x8b5cf6,
+  IFCMEMBER: 0x475569,
+  IFCPLATE: 0x64748b,
+  IFCCURTAINWALL: 0x38bdf8,
+  IFCFLOWTERMINAL: 0x14b8a6,
   IFCFLOWSEGMENT: 0x22c55e,
-  IFCFURNISHINGELEMENT: 0xfb923c,
-  IFCSPACE: 0xa78bfa,
-  IFCBUILDINGELEMENTPROXY: 0xd1d5db
+  IFCFURNISHINGELEMENT: 0xf97316,
+  IFCSPACE: 0xa855f7,
+  IFCBUILDINGELEMENTPROXY: 0x6b7280
 };
 
-function getCategoryName(rawType: string): string {
+export const STOREY_PALETTE = [
+  0x3b82f6, // Blue
+  0x10b981, // Emerald
+  0xf59e0b, // Amber
+  0xec4899, // Pink
+  0x8b5cf6, // Violet
+  0x06b6d4, // Cyan
+  0xf97316, // Orange
+  0x14b8a6, // Teal
+  0xa855f7, // Purple
+  0x64748b  // Slate
+];
+
+export function getCategoryDisplayName(rawType: string): string {
   const upper = rawType.toUpperCase();
   const map: Record<string, string> = {
     IFCWALL: 'Muros (IfcWall)',
-    IFCWALLSTANDARDCASE: 'Muros Estandar (IfcWallStandardCase)',
+    IFCWALLSTANDARDCASE: 'Muros Estándar (IfcWallStandardCase)',
     IFCSLAB: 'Forjados / Losas (IfcSlab)',
     IFCCOLUMN: 'Pilares / Columnas (IfcColumn)',
     IFCBEAM: 'Vigas (IfcBeam)',
@@ -63,9 +76,9 @@ function getCategoryName(rawType: string): string {
     IFCCURTAINWALL: 'Muro Cortina (IfcCurtainWall)',
     IFCFURNISHINGELEMENT: 'Mobiliario (IfcFurnishingElement)',
     IFCFLOWTERMINAL: 'Instalaciones (IfcFlowTerminal)',
-    IFCFLOWSEGMENT: 'Tuberias / Conductos (IfcFlowSegment)',
+    IFCFLOWSEGMENT: 'Tuberías / Conductos (IfcFlowSegment)',
     IFCSPACE: 'Espacios / Ambientes (IfcSpace)',
-    IFCBUILDINGELEMENTPROXY: 'Objetos Genericos (IfcBuildingElementProxy)'
+    IFCBUILDINGELEMENTPROXY: 'Objetos Genéricos (IfcBuildingElementProxy)'
   };
   return map[upper] || upper.replace(/^IFC/, '');
 }
@@ -73,6 +86,7 @@ function getCategoryName(rawType: string): string {
 export async function loadIFCFile(
   data: Uint8Array,
   fileName: string,
+  modelId: string = 'model_' + Date.now(),
   onProgress?: (stage: string, percent: number) => void
 ): Promise<LoadedIFCModel> {
   const api = await getIfcAPI();
@@ -82,17 +96,17 @@ export async function loadIFCFile(
     COORDINATE_TO_ORIGIN: true
   } as any);
 
-  onProgress?.('Indexando parametros y relaciones IFC...', 30);
-  const extractor = new IFCDataExtractor(api, modelID);
+  onProgress?.('Indexando parámetros y relaciones IFC...', 30);
+  const extractor = new IFCDataExtractor(api, modelID, modelId);
   await extractor.indexAllRelationships();
 
-  onProgress?.('Generando geometrias 3D de alta precision...', 50);
+  onProgress?.('Generando geometrías 3D de alta precisión...', 50);
 
   const meshGroup = new THREE.Group();
-  meshGroup.name = `IFCModel_${modelID}`;
+  meshGroup.name = `IFCModel_${modelId}`;
+  meshGroup.userData = { modelId, fileName };
 
   const elements = new Map<number, IFCElementData>();
-  const expressIDToMeshIndex = new Map<number, { meshIndex: number }>();
   const allExpressIDs: number[] = [];
   const categoriesCount: Record<string, number> = {};
 
@@ -125,7 +139,17 @@ export async function loadIFCFile(
     return mat;
   }
 
+  // Pass 1: Stream meshes and create element data
+  const rawMeshes: FlatMesh[] = [];
   api.StreamAllMeshes(modelID, (flatMesh: FlatMesh) => {
+    rawMeshes.push(flatMesh);
+  });
+
+  // Index storeys to assign storey colors
+  const storeyColorMap = new Map<string, number>();
+  let storeyColorIdx = 0;
+
+  for (const flatMesh of rawMeshes) {
     const expressID = flatMesh.expressID;
     allExpressIDs.push(expressID);
 
@@ -137,15 +161,40 @@ export async function loadIFCFile(
       }
     } catch (e) {}
 
-    const catName = getCategoryName(ifcType);
+    const catName = getCategoryDisplayName(ifcType);
     categoriesCount[catName] = (categoriesCount[catName] || 0) + 1;
 
     const elementData = extractor.getElementCompleteData(expressID, ifcType);
     elements.set(expressID, elementData);
 
+    const sName = elementData.storeyName || 'Sin Nivel';
+    if (!storeyColorMap.has(sName)) {
+      storeyColorMap.set(sName, STOREY_PALETTE[storeyColorIdx % STOREY_PALETTE.length]);
+      storeyColorIdx++;
+    }
+  }
+
+  // Pass 2: Build Three.js Geometry
+  for (const flatMesh of rawMeshes) {
+    const expressID = flatMesh.expressID;
+    const elementData = elements.get(expressID)!;
+    const ifcType = elementData.ifcType;
+    const catName = getCategoryDisplayName(ifcType);
+    const catColor = CATEGORY_COLORS[ifcType.toUpperCase()] || 0x94a3b8;
+    const storeyColor = storeyColorMap.get(elementData.storeyName || 'Sin Nivel') || 0x3b82f6;
+
     const geomGroup = new THREE.Group();
-    geomGroup.name = `Element_${expressID}`;
-    geomGroup.userData = { expressID, ifcType, name: elementData.name };
+    geomGroup.name = `Element_${modelId}_${expressID}`;
+    geomGroup.userData = {
+      modelId,
+      expressID,
+      ifcType,
+      name: elementData.name,
+      storeyName: elementData.storeyName,
+      categoryName: catName,
+      categoryColor: catColor,
+      storeyColor: storeyColor
+    };
 
     const geomSize = flatMesh.geometries.size();
     for (let i = 0; i < geomSize; i++) {
@@ -179,7 +228,16 @@ export async function loadIFCFile(
       mesh.applyMatrix4(transformMatrix);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      mesh.userData = { expressID, ifcType, originalMaterial: mat };
+      mesh.userData = {
+        modelId,
+        expressID,
+        ifcType,
+        storeyName: elementData.storeyName,
+        categoryName: catName,
+        categoryColor: catColor,
+        storeyColor: storeyColor,
+        originalMaterial: mat
+      };
 
       geomGroup.add(mesh);
     }
@@ -187,11 +245,11 @@ export async function loadIFCFile(
     if (geomGroup.children.length > 0) {
       meshGroup.add(geomGroup);
     }
-  });
+  }
 
-  onProgress?.('Estructurando arbol espacial BIM...', 85);
+  onProgress?.('Estructurando árbol espacial BIM...', 85);
 
-  const spatialTree = buildSpatialHierarchy(api, modelID, elements);
+  const spatialTree = buildSpatialHierarchy(modelId, fileName, elements);
 
   const storeysMap = new Map<string, { id: number; name: string; elementCount: number }>();
   for (const [_, el] of elements) {
@@ -211,12 +269,13 @@ export async function loadIFCFile(
   } catch (e) {}
 
   const metadata: IFCModelMetadata = {
+    id: modelId,
     fileName,
     fileSize: data.byteLength,
     schema,
     description: `Modelo BIM ${schema}`,
     author: 'Usuario BIM',
-    organization: 'Organizacion',
+    organization: 'Organización',
     originatingSystem: 'Visualizador IFC Pro',
     timestamp: new Date().toLocaleString(),
     totalElements: elements.size,
@@ -224,27 +283,30 @@ export async function loadIFCFile(
     storeys: Array.from(storeysMap.values())
   };
 
-  onProgress?.('Modelo cargado exitosamente!', 100);
+  onProgress?.('¡Modelo cargado exitosamente!', 100);
 
   return {
+    id: modelId,
     metadata,
     elements,
     spatialTree,
     meshGroup,
-    expressIDToMeshIndex,
-    allExpressIDs
+    allExpressIDs,
+    visible: true
   };
 }
 
 function buildSpatialHierarchy(
-  api: IfcAPI,
-  modelID: number,
+  modelId: string,
+  fileName: string,
   elements: Map<number, IFCElementData>
 ): SpatialNode {
   const rootNode: SpatialNode = {
+    id: `model_${modelId}`,
+    modelId,
     expressID: 0,
-    type: 'IfcProject',
-    name: 'Proyecto BIM',
+    type: 'ModelRoot',
+    name: fileName,
     children: []
   };
 
@@ -256,7 +318,7 @@ function buildSpatialHierarchy(
       storeyGroups.set(sName, new Map());
     }
     const catMap = storeyGroups.get(sName)!;
-    const catName = getCategoryName(el.ifcType);
+    const catName = getCategoryDisplayName(el.ifcType);
     if (!catMap.has(catName)) {
       catMap.set(catName, []);
     }
@@ -265,9 +327,12 @@ function buildSpatialHierarchy(
 
   for (const [storeyName, catMap] of storeyGroups) {
     const storeyNode: SpatialNode = {
+      id: `storey_${modelId}_${storeyName}`,
+      modelId,
       expressID: 0,
       type: 'IfcBuildingStorey',
       name: storeyName,
+      storeyName: storeyName,
       children: [],
       elementCount: 0
     };
@@ -276,14 +341,21 @@ function buildSpatialHierarchy(
     for (const [catName, elemList] of catMap) {
       storeyCount += elemList.length;
       const catNode: SpatialNode = {
+        id: `cat_${modelId}_${storeyName}_${catName}`,
+        modelId,
         expressID: 0,
         type: 'CategoryGroup',
         name: `${catName} (${elemList.length})`,
         category: catName,
+        storeyName: storeyName,
         children: elemList.map(el => ({
+          id: `elem_${modelId}_${el.expressID}`,
+          modelId,
           expressID: el.expressID,
-          type: el.ifcType,
+          type: 'Element',
           name: el.name,
+          category: catName,
+          storeyName: storeyName,
           children: []
         }))
       };

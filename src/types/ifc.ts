@@ -52,6 +52,7 @@ export interface IFCClassificationData {
 }
 
 export interface IFCElementData {
+  modelId: string;
   expressID: number;
   globalId: string;
   ifcType: string;
@@ -71,15 +72,19 @@ export interface IFCElementData {
 }
 
 export interface SpatialNode {
+  id: string;
+  modelId?: string;
   expressID: number;
-  type: string;
+  type: 'IfcProject' | 'IfcSite' | 'IfcBuilding' | 'IfcBuildingStorey' | 'CategoryGroup' | 'Element' | 'ModelRoot';
   name: string;
   children: SpatialNode[];
   elementCount?: number;
   category?: string;
+  storeyName?: string;
 }
 
 export interface IFCModelMetadata {
+  id: string;
   fileName: string;
   fileSize: number;
   schema: string;
@@ -94,10 +99,13 @@ export interface IFCModelMetadata {
 }
 
 export interface LoadedIFCModel {
+  id: string;
   metadata: IFCModelMetadata;
   elements: Map<number, IFCElementData>;
   spatialTree: SpatialNode | null;
   meshGroup: any;
-  expressIDToMeshIndex: Map<number, { meshIndex: number; instanceIndex?: number }>;
   allExpressIDs: number[];
+  visible: boolean;
 }
+
+export type ColorMode = 'category' | 'storey' | 'original';

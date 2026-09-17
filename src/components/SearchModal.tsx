@@ -1,18 +1,18 @@
 import React, { useState, useMemo } from 'react';
-import { IFCElementData } from '../types/ifc';
+import { IFCElementData, LoadedIFCModel } from '../types/ifc';
 import { Search, X, Box, Filter } from 'lucide-react';
 
 interface SearchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  elements: Map<number, IFCElementData>;
-  onSelectElement: (expressID: number) => void;
+  models: LoadedIFCModel[];
+  onSelectElement: (modelId: string, expressID: number) => void;
 }
 
 export const SearchModal: React.FC<SearchModalProps> = ({
   isOpen,
   onClose,
-  elements,
+  models,
   onSelectElement
 }) => {
   const [query, setQuery] = useState('');
@@ -20,11 +20,13 @@ export const SearchModal: React.FC<SearchModalProps> = ({
 
   const categories = useMemo(() => {
     const set = new Set<string>();
-    for (const [_, el] of elements) {
-      set.add(el.ifcType);
-    }
+    models.forEach(m => {
+      m.elements.forEach(el => {
+        set.add(el.ifcType);
+      });
+    });
     return Array.from(set).sort();
-  }, [elements]);
+  }, [models]);
 
   const filteredResults = useMemo(() => {
     if (!query.trim() && selectedCategory === 'all') return [];
@@ -32,48 +34,51 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     const q = query.toLowerCase().trim();
     const results: IFCElementData[] = [];
 
-    for (const [_, el] of elements) {
-      if (selectedCategory !== 'all' && el.ifcType !== selectedCategory) {
-        continue;
-      }
-
-      if (!q) {
-        results.push(el);
-        if (results.length >= 100) break;
-        continue;
-      }
-
-      const matchId = String(el.expressID).includes(q);
-      const matchName = el.name.toLowerCase().includes(q);
-      const matchGuid = el.globalId.toLowerCase().includes(q);
-      const matchTag = el.tag.toLowerCase().includes(q);
-      const matchType = el.ifcType.toLowerCase().includes(q);
-      const matchStorey = el.storeyName.toLowerCase().includes(q);
-
-      let matchPset = false;
-      for (const p of el.propertySets) {
-        for (const [pk, pv] of Object.entries(p.properties)) {
-          if (pk.toLowerCase().includes(q) || String(pv).toLowerCase().includes(q)) {
-            matchPset = true;
-            break;
-          }
+    for (const m of models) {
+      for (const [_, el] of m.elements) {
+        if (selectedCategory !== 'all' && el.ifcType !== selectedCategory) {
+          continue;
         }
-        if (matchPset) break;
-      }
 
-      if (matchId || matchName || matchGuid || matchTag || matchType || matchStorey || matchPset) {
-        results.push(el);
-        if (results.length >= 100) break;
+        if (!q) {
+          results.push(el);
+          if (results.length >= 100) break;
+          continue;
+        }
+
+        const matchId = String(el.expressID).includes(q);
+        const matchName = el.name.toLowerCase().includes(q);
+        const matchGuid = el.globalId.toLowerCase().includes(q);
+        const matchTag = el.tag.toLowerCase().includes(q);
+        const matchType = el.ifcType.toLowerCase().includes(q);
+        const matchStorey = el.storeyName.toLowerCase().includes(q);
+
+        let matchPset = false;
+        for (const p of el.propertySets) {
+          for (const [pk, pv] of Object.entries(p.properties)) {
+            if (pk.toLowerCase().includes(q) || String(pv).toLowerCase().includes(q)) {
+              matchPset = true;
+              break;
+            }
+          }
+          if (matchPset) break;
+        }
+
+        if (matchId || matchName || matchGuid || matchTag || matchType || matchStorey || matchPset) {
+          results.push(el);
+          if (results.length >= 100) break;
+        }
       }
+      if (results.length >= 100) break;
     }
 
     return results;
-  }, [query, selectedCategory, elements]);
+  }, [query, selectedCategory, models]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in select-none">
       <div className="bg-bim-900 border border-bim-700 w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
         {/* Modal Header */}
         <div className="p-4 border-b border-bim-800 bg-bim-950/80 flex items-center justify-between">
@@ -133,9 +138,9 @@ export const SearchModal: React.FC<SearchModalProps> = ({
           ) : (
             filteredResults.map(el => (
               <div
-                key={el.expressID}
+                key={`${el.modelId}_${el.expressID}`}
                 onClick={() => {
-                  onSelectElement(el.expressID);
+                  onSelectElement(el.modelId, el.expressID);
                   onClose();
                 }}
                 className="p-3 bg-bim-950/60 hover:bg-bim-800/80 border border-bim-800/80 hover:border-cyan-500/50 rounded-xl cursor-pointer transition flex items-center justify-between gap-4 group"

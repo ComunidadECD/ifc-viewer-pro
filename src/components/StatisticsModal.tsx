@@ -1,13 +1,12 @@
-import React from 'react';
-import { IFCModelMetadata, IFCElementData } from '../types/ifc';
-import { BarChart3, X, FileSpreadsheet, Download, Layers, Box, Cpu, HardDrive } from 'lucide-react';
+import React, { useState } from 'react';
+import { LoadedIFCModel } from '../types/ifc';
+import { BarChart3, X, FileSpreadsheet, Download, Layers, Box, Cpu, HardDrive, FileCode2 } from 'lucide-react';
 import { exportModelToExcel, exportModelToCSV, exportModelToJSON, downloadFile } from '../services/exporter';
 
 interface StatisticsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  metadata: IFCModelMetadata | null;
-  elements: Map<number, IFCElementData>;
+  models: LoadedIFCModel[];
 }
 
 export function formatBytes(bytes: number, decimals = 2) {
@@ -22,10 +21,15 @@ export function formatBytes(bytes: number, decimals = 2) {
 export const StatisticsModal: React.FC<StatisticsModalProps> = ({
   isOpen,
   onClose,
-  metadata,
-  elements
+  models
 }) => {
-  if (!isOpen || !metadata) return null;
+  const [selectedModelIdx, setSelectedModelIdx] = useState<number>(0);
+
+  if (!isOpen || models.length === 0) return null;
+
+  const currentModel = models[selectedModelIdx] || models[0];
+  const metadata = currentModel.metadata;
+  const elements = currentModel.elements;
 
   const handleExportExcel = () => {
     const buffer = exportModelToExcel(metadata, elements);
@@ -46,15 +50,17 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
   };
 
   const sortedCategories = Object.entries(metadata.categories).sort((a, b) => (b[1] as number) - (a[1] as number));
+  const totalFederatedElements = models.reduce((a, b) => a + b.metadata.totalElements, 0);
+  const totalFederatedSize = models.reduce((a, b) => a + b.metadata.fileSize, 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in select-none">
       <div className="bg-bim-900 border border-bim-700 w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
         <div className="p-4 border-b border-bim-800 bg-bim-950/80 flex items-center justify-between">
           <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm">
             <BarChart3 size={18} />
-            <span>Estadísticas & Resumen del Modelo BIM</span>
+            <span>Estadísticas y Resumen del Modelo BIM</span>
           </div>
           <button
             onClick={onClose}
@@ -63,6 +69,26 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
             <X size={18} />
           </button>
         </div>
+
+        {/* Model Tabs if Multiple Models */}
+        {models.length > 1 && (
+          <div className="flex items-center gap-2 px-6 pt-4 border-b border-bim-800 bg-bim-950/40 overflow-x-auto custom-scrollbar">
+            {models.map((m, idx) => (
+              <button
+                key={m.id}
+                onClick={() => setSelectedModelIdx(idx)}
+                className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-t-xl border-t border-x transition whitespace-nowrap ${
+                  selectedModelIdx === idx
+                    ? 'bg-bim-900 border-bim-700 text-cyan-300'
+                    : 'bg-bim-950 border-transparent text-slate-400 hover:text-white hover:bg-bim-800'
+                }`}
+              >
+                <FileCode2 size={13} className="text-cyan-400" />
+                <span>{m.metadata.fileName}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
@@ -81,7 +107,9 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
                 <span className="text-xs uppercase font-semibold">Total Elementos</span>
                 <Box size={16} className="text-indigo-400" />
               </div>
-              <div className="text-xl font-extrabold text-white font-mono">{metadata.totalElements}</div>
+              <div className="text-xl font-extrabold text-white font-mono">
+                {metadata.totalElements} {models.length > 1 ? `(Total: ${totalFederatedElements})` : ''}
+              </div>
             </div>
 
             <div className="bg-bim-950/60 border border-bim-800 p-4 rounded-xl">
@@ -104,7 +132,7 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
           {/* Categories Breakdown */}
           <div className="bg-bim-950/40 border border-bim-800 p-4 rounded-xl space-y-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-              Desglose de Elementos por Categoría IFC
+              Desglose de Elementos por Categoría IFC ({metadata.fileName})
             </h4>
 
             <div className="space-y-2">
@@ -153,7 +181,7 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
             <div>
               <h4 className="text-sm font-bold text-white mb-0.5">Exportación de Datos BIM</h4>
               <p className="text-xs text-slate-400">
-                Descarga la totalidad de parámetros, Psets y Qto del modelo completo.
+                Descarga la totalidad de parámetros, Psets y Qto del modelo seleccionado.
               </p>
             </div>
 

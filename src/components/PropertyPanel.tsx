@@ -43,7 +43,7 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
         </div>
         <h4 className="text-sm font-semibold text-slate-300 mb-1">Inspector de Parámetros</h4>
         <p className="text-xs text-slate-500 max-w-[220px]">
-          Selecciona un elemento en el modelo 3D o en el árbol espacial para ver todos sus parámetros IFC 2.3 / 4.
+          Selecciona un elemento en el modelo 3D o en el árbol espacial para inspeccionar todos sus parámetros IFC 2.3 / 4.
         </p>
       </div>
     );
@@ -66,7 +66,7 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-bim-900 border-l border-bim-800 select-none overflow-hidden">
+    <div className="flex flex-col h-full bg-bim-900 border-l border-bim-800 select-none overflow-hidden animate-fade-in">
       {/* Element Header */}
       <div className="p-4 border-b border-bim-800 bg-bim-950/60 shrink-0">
         <div className="flex items-start justify-between gap-2 mb-2">
