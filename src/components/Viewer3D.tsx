@@ -65,22 +65,23 @@ export const Viewer3D = forwardRef<Viewer3DRef, Viewer3DProps>(({
   );
 
   // Material caches for color modes
-  const categoryMaterialCache = useRef<Map<number, THREE.MeshStandardMaterial>>(new Map());
-  const storeyMaterialCache = useRef<Map<number, THREE.MeshStandardMaterial>>(new Map());
+  const colorMaterialCache = useRef<Map<string, THREE.MeshStandardMaterial>>(new Map());
 
-  const getColoredMaterial = (colorHex: number, isTransparent: boolean, opacity: number): THREE.MeshStandardMaterial => {
-    const key = colorHex;
-    const cache = categoryMaterialCache.current;
+  const getColoredMaterial = (colorHex: number, isTransparent?: boolean, opacity?: number): THREE.MeshStandardMaterial => {
+    const safeOpacity = (typeof opacity === 'number' && !isNaN(opacity)) ? opacity : 1.0;
+    const trans = Boolean(isTransparent && safeOpacity < 0.99);
+    const key = `${colorHex}_${trans}_${safeOpacity.toFixed(2)}`;
+    const cache = colorMaterialCache.current;
     if (cache.has(key)) return cache.get(key)!;
 
     const mat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(colorHex),
       roughness: 0.45,
       metalness: 0.1,
-      transparent: isTransparent,
-      opacity: opacity,
+      transparent: trans,
+      opacity: safeOpacity,
       side: THREE.DoubleSide,
-      depthWrite: !isTransparent
+      depthWrite: !trans
     });
     cache.set(key, mat);
     return mat;

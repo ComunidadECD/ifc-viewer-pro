@@ -139,17 +139,20 @@ export async function loadIFCFile(
     return mat;
   }
 
-  // Pass 1: Stream meshes and create element data
-  const rawMeshes: FlatMesh[] = [];
-  api.StreamAllMeshes(modelID, (flatMesh: FlatMesh) => {
-    rawMeshes.push(flatMesh);
-  });
-
   // Index storeys to assign storey colors
   const storeyColorMap = new Map<string, number>();
   let storeyColorIdx = 0;
 
-  for (const flatMesh of rawMeshes) {
+  function getStoreyColor(storeyName: string): number {
+    if (!storeyColorMap.has(storeyName)) {
+      storeyColorMap.set(storeyName, STOREY_PALETTE[storeyColorIdx % STOREY_PALETTE.length]);
+      storeyColorIdx++;
+    }
+    return storeyColorMap.get(storeyName)!;
+  }
+
+  // Stream meshes and create 3D geometries synchronously within WASM callback
+  api.StreamAllMeshes(modelID, (flatMesh: FlatMesh) => {
     const expressID = flatMesh.expressID;
     allExpressIDs.push(expressID);
 
@@ -168,20 +171,8 @@ export async function loadIFCFile(
     elements.set(expressID, elementData);
 
     const sName = elementData.storeyName || 'Sin Nivel';
-    if (!storeyColorMap.has(sName)) {
-      storeyColorMap.set(sName, STOREY_PALETTE[storeyColorIdx % STOREY_PALETTE.length]);
-      storeyColorIdx++;
-    }
-  }
-
-  // Pass 2: Build Three.js Geometry
-  for (const flatMesh of rawMeshes) {
-    const expressID = flatMesh.expressID;
-    const elementData = elements.get(expressID)!;
-    const ifcType = elementData.ifcType;
-    const catName = getCategoryDisplayName(ifcType);
+    const storeyColor = getStoreyColor(sName);
     const catColor = CATEGORY_COLORS[ifcType.toUpperCase()] || 0x94a3b8;
-    const storeyColor = storeyColorMap.get(elementData.storeyName || 'Sin Nivel') || 0x3b82f6;
 
     const geomGroup = new THREE.Group();
     geomGroup.name = `Element_${modelId}_${expressID}`;
@@ -190,7 +181,7 @@ export async function loadIFCFile(
       expressID,
       ifcType,
       name: elementData.name,
-      storeyName: elementData.storeyName,
+      storeyName: sName,
       categoryName: catName,
       categoryColor: catColor,
       storeyColor: storeyColor
@@ -206,16 +197,23 @@ export async function loadIFCFile(
       if (rawVerts.length === 0 || rawIndices.length === 0) continue;
 
       const bufferGeometry = new THREE.BufferGeometry();
-      const posArray: number[] = [];
-      const normArray: number[] = [];
+      const posArray = new Float32Array(rawVerts.length / 2);
+      const normArray = new Float32Array(rawVerts.length / 2);
 
+      let pIdx = 0;
+      let nIdx = 0;
       for (let v = 0; v < rawVerts.length; v += 6) {
-        posArray.push(rawVerts[v], rawVerts[v + 1], rawVerts[v + 2]);
-        normArray.push(rawVerts[v + 3], rawVerts[v + 4], rawVerts[v + 5]);
+        posArray[pIdx++] = rawVerts[v];
+        posArray[pIdx++] = rawVerts[v + 1];
+        posArray[pIdx++] = rawVerts[v + 2];
+
+        normArray[nIdx++] = rawVerts[v + 3];
+        normArray[nIdx++] = rawVerts[v + 4];
+        normArray[nIdx++] = rawVerts[v + 5];
       }
 
-      bufferGeometry.setAttribute('position', new THREE.Float32BufferAttribute(posArray, 3));
-      bufferGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(normArray, 3));
+      bufferGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+      bufferGeometry.setAttribute('normal', new THREE.BufferAttribute(normArray, 3));
       bufferGeometry.setIndex(Array.from(rawIndices));
 
       const transformMatrix = new THREE.Matrix4();
@@ -232,7 +230,7 @@ export async function loadIFCFile(
         modelId,
         expressID,
         ifcType,
-        storeyName: elementData.storeyName,
+        storeyName: sName,
         categoryName: catName,
         categoryColor: catColor,
         storeyColor: storeyColor,
@@ -245,7 +243,7 @@ export async function loadIFCFile(
     if (geomGroup.children.length > 0) {
       meshGroup.add(geomGroup);
     }
-  }
+  });
 
   onProgress?.('Estructurando árbol espacial BIM...', 85);
 
